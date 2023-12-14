@@ -18,51 +18,42 @@ cursor = connection.cursor()
 def lambda_handler(event, context):
     print("event: ", event)
 
-    if 'Records' in event:
-        return processTriggerS3(event)
+    if 'httpMethod' in event and event['httpMethod'] == 'POST':
+        data = json.loads(event['body'])
+        bucket = data['bucket_name']
+        key = data['filename']
+        print(bucket, key)
+        response = s3.get_object(Bucket=bucket, Key=key)
+        excel_data = pd.read_excel(BytesIO(response['Body'].read()), header=0)
 
-    elif 'httpMethod' in event and event['httpMethod'] == 'GET':
-        cursor.execute('SELECT * FROM products')
-        # Fetch the column names
-        columns = [desc[0] for desc in cursor.description]
+        try:
+            for index, row in excel_data.iterrows():
+                insert_query = "INSERT INTO products (`name`, `price`) VALUES (%s, %s)"
+                cursor.execute(insert_query, (row['product_name'], row['price']))
 
-        # Fetch all rows
-        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            connection.commit()
 
-        print("data products: ", rows)
-        return {
-            'statusCode': 200,
-            'body': json.dumps(rows)
-        }
+            cursor.execute('SELECT * FROM products')
+            # Fetch the column names
+            columns = [desc[0] for desc in cursor.description]
+
+            # Fetch all rows
+            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+            print("data products: ", rows)
+            return {
+                'statusCode': 200,
+                'body': json.dumps(rows)
+            }
+
+        except Exception as e:
+            print(f"Error: {str(e)}")
+            return {
+                'statusCode': 500,
+                'body': "Error database"
+            }
     else:
         return {
             'statusCode': 404,
             'body': 'Not found'
-        }
-
-def processTriggerS3(event):
-    bucket = event['Records'][0]['s3']['bucket']['name']
-    key = event['Records'][0]['s3']['object']['key']
-    print("filename triggerS3Upload: ", key)
-
-    response = s3.get_object(Bucket=bucket, Key=key)
-    excel_data = pd.read_excel(BytesIO(response['Body'].read()), header=0)
-
-    try:
-        for index, row in excel_data.iterrows():
-            insert_query = "INSERT INTO products (`name`, `price`) VALUES (%s, %s)"
-            cursor.execute(insert_query, (row['product_name'], row['price']))
-
-        connection.commit()
-
-        return {
-            'statusCode': 200,
-            'body': 'insert db success'
-        }
-
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        return {
-            'statusCode': 500,
-            'body': "Error database"
         }
